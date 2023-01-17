@@ -963,10 +963,10 @@ def find_and_headerify_all_children(api, task, section_tasks, mode):
                     #                 content=child_task.content[2:])
                     # overview_updated_ids.append(child_task.id)
 
-            find_and_headerify_all_children(
+            api = find_and_headerify_all_children(
                 api, child_task, section_tasks, mode)
 
-    return 0
+    return api
 
 # Contains all main autodoist functionalities
 
@@ -1435,7 +1435,7 @@ def autodoist_magic(args, api, connection):
                 first_found[0] = True
 
     # Return all ids and corresponding labels that need to be modified
-    return overview_task_ids, overview_task_labels
+    return api, overview_task_ids, overview_task_labels
 
 # Main
 
@@ -1511,7 +1511,7 @@ def main():
         start_time = time.time()
 
         # Evaluate projects, sections, and tasks
-        overview_task_ids, overview_task_labels = autodoist_magic(
+        api, overview_task_ids, overview_task_labels = autodoist_magic(
             args, api, connection)
 
         # Commit next action label changes
