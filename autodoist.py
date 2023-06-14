@@ -343,17 +343,29 @@ def initialise_api(args):
                 'Wrong regeneration mode. Please choose a number from 0 to 2. Check --help for more information on the available modes.')
             exit(1)
 
+    # Check if separator is a sensible character:
+    if args.add_parent is not None:
+        if len(args.add_parent) > 1:
+            logging.error(
+                'Add parent only allows one character. Check --help for more information on the available modes.')
+            exit(1)
+
+        if args.add_parent.lower() not in '()[]{}<>|$^&;:':
+            logging.error(
+                'Add parent only allows one of these characters: \'()[]{}<>|$^&;:\'. --help for more information on the available modes.')
+            exit(1)
+
     # Show which modes are enabled:
     modes = []
     m_num = 0
-    for x in [args.label, args.regeneration, args.end]:
+    for x in [args.label, args.regeneration, args.end, args.add_parent]:
         if x:
             modes.append('Enabled')
             m_num += 1
         else:
             modes.append('Disabled')
 
-    logging.info("You are running with the following functionalities:\n\n   Next action labelling mode: {}\n   Regenerate sub-tasks mode: {}\n   Shifted end-of-day mode: {}\n".format(*modes))
+    logging.info("You are running with the following functionalities:\n\n   Next action labelling mode: {}\n   Regenerate sub-tasks mode: {}\n   Shifted end-of-day mode: {}\n   Add parent mode: {}\n".format(*modes))
 
     if m_num == 0:
         logging.info(
@@ -466,6 +478,23 @@ def commit_content_update(api, task_id, content):
     data = {"type": "item_update", "uuid": uuid,
             "args": {"id": task_id, "content": quote(content)}}
     api.queue.append(data)
+
+    return api
+
+# Commit task content change to queue
+
+
+def commit_contents_update(api, overview_task_contents_ids, overview_task_contents):
+    filtered_overview_contents_ids = [
+        k for k, v in overview_task_contents_ids.items() if v != 0]
+
+    for task_id in filtered_overview_contents_ids:
+        content = overview_task_contents[task_id]
+        
+        uuid = str(time.perf_counter())  # Create unique request id
+        data = {"type": "item_update", "uuid": uuid,
+                "args": {"id": task_id, "content": content}}
+        api.queue.append(data)
 
     return api
 
@@ -676,6 +705,19 @@ def remove_label(task, label, overview_task_ids, overview_task_labels):
             overview_task_ids[task.id] = -1
         overview_task_labels[task.id] = labels
 
+
+# Logic to track for changing content of a task 
+
+
+def update_content(task, content, overview_task_contents_ids, overview_task_contents):
+    if content != task.content:
+        logging.debug('Updating \'%s\' to \'%s\'', task.content,content)
+        
+        try:
+            overview_task_contents_ids[task.id] += 1
+        except:
+            overview_task_contents_ids[task.id] = 1
+        overview_task_contents[task.id] = content
 
 # Check if header logic needs to be applied
 
@@ -976,8 +1018,11 @@ def autodoist_magic(args, api, connection):
     # Preallocate dictionaries and other values
     overview_task_ids = {}
     overview_task_labels = {}
+    overview_task_contents_ids = {}
+    overview_task_contents = {}
     next_action_label = args.label
     regen_labels_id = args.regen_label_names
+    add_parent = args.add_parent
     first_found = [False, False, False]
     api.queue = []
     api.overview_updated_ids = []
@@ -1434,8 +1479,40 @@ def autodoist_magic(args, api, connection):
             if next_action_label is not None and first_found[0] == False and section_tasks:
                 first_found[0] = True
 
+    # If option turned on, start adding parent logic
+    if add_parent is not None:
+        task_dict = {task.id:task for task in all_tasks}
+        ps_suffix=args.s_suffix+args.p_suffix+' '
+
+        # iterate trough all subtask of a task
+        for task in all_tasks:
+            parent = task_dict.get(task.parent_id)
+            content = task.content.strip(ps_suffix).split(add_parent) # TODO: don't strip leading and only more thant the last character
+
+            if parent is None or 'no_parent' in task.labels or 'no_sub_parent' in parent.labels: # skip if task has no parent (id is 0 -> no task in dict with this id) or label says to ignore task
+                if len(content) >= 2: # remove parent name, if task has lost parent
+                    update_content(task, content[0], overview_task_contents_ids, overview_task_contents)
+                continue
+            
+            parent_content=parent.content.strip(ps_suffix) # TODO: don't strip leading and only more thant the last character
+            
+            # Determine if task already has a parent, than check if the parent(name) has changed
+            if len(content) >= 2: 
+                if parent_content == add_parent.join(content[1:]).strip(): 
+                    # skip, already has correct parent
+                    continue 
+            
+            # add the serial or parallel chars to the end if the where included in the task
+            parallel_serial=task.content[-1]
+            if parallel_serial not in ps_suffix: 
+                parallel_serial=''
+
+            # update task content with (new) parent name
+            new_content = '%s %s %s %s' % (content[0].strip(), add_parent, parent_content, parallel_serial)
+            update_content(task, new_content, overview_task_contents_ids, overview_task_contents)
+
     # Return all ids and corresponding labels that need to be modified
-    return overview_task_ids, overview_task_labels
+    return overview_task_ids, overview_task_labels, overview_task_contents_ids, overview_task_contents
 
 # Main
 
@@ -1456,6 +1533,8 @@ def main():
         '-r', '--regeneration', help='[CURRENTLY DISABLED FEATURE] enable regeneration of sub-tasks in recurring lists. Chose overall mode: 0 - regen off, 1 - regen all (default),  2 - regen only if all sub-tasks are completed. Task labels can be used to overwrite this mode.', nargs='?', const='1', default=None, type=int)
     parser.add_argument(
         '-e', '--end', help='enable alternative end-of-day time instead of default midnight. Enter a number from 1 to 24 to define which hour is used.', type=int)
+    parser.add_argument(
+        '-ap', '--add_parent', help='adds the parent\'s task name to the end of subtasks. Define the separator (ALL DATA TO THE RIGHT OF THE SEPARATOR WILL BE DELETED), allowed characters: \'()[]{}<>|$^&;:\' ', type=str)
     parser.add_argument(
         '-d', '--delay', help='specify the delay in seconds between syncs (default 5).', default=5, type=int)
     parser.add_argument(
@@ -1511,13 +1590,17 @@ def main():
         start_time = time.time()
 
         # Evaluate projects, sections, and tasks
-        overview_task_ids, overview_task_labels = autodoist_magic(
+        overview_task_ids, overview_task_labels, overview_task_contents_ids, overview_task_contents = autodoist_magic(
             args, api, connection)
 
         # Commit next action label changes
         if args.label is not None:
             api = commit_labels_update(api, overview_task_ids,
                                        overview_task_labels)
+
+        # Commit add parent content changes     
+        if args.add_parent is not None:
+            api = commit_contents_update(api,overview_task_contents_ids, overview_task_contents)
 
         # Sync all queued up changes
         if api.queue:
