@@ -343,7 +343,7 @@ def initialise_api(args):
                 'Wrong regeneration mode. Please choose a number from 0 to 2. Check --help for more information on the available modes.')
             exit(1)
 
-    # Check if separator is a sensible character:
+    # Check if add_parent is a sensible separator:
     if args.add_parent is not None:
         if len(args.add_parent) > 1:
             logging.error(
